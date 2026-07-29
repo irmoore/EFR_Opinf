@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.ipynb_checkpoints/
+.pixi/
+.claude/
+Experiments/
+Meshes/BFS_Mesh
+Meshes/BFS_Mesh.h5
