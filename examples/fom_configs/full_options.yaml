@@ -1,0 +1,38 @@
+# Reference config showing every option run_cylinder_fom() understands,
+# with its default value noted. Nothing here is required except time.T --
+# see standard_T20.yaml / efr_T20.yaml for minimal examples.
+#
+# Mesh and physics (geometry, viscosity, density, etc.) are intentionally
+# not configurable here -- this code reproduces a fixed benchmark problem
+# for ROM experimentation, not a general CFD solver.
+
+time:
+  T: 20.0             # required -- final simulation time, no default
+  dt: 0.0005            # default: 1/2000. At your own risk: changes the
+                          # physical timestep, may affect solver
+                          # stability/accuracy vs. the validated default.
+  sample_gap: 10          # default: 10. At your own risk: changes snapshot
+                          # spacing -- downstream code may assume a
+                          # particular gap.
+
+# Optional block. Omit entirely for a standard (unfiltered) run -- that is
+# the default. When present, applies a differential filter + relaxation
+# to the FOM velocity field itself once t >= filter_start. This is FOM-level
+# EFR (better/regularized training data), distinct from the ROM-level EFR
+# applied later during reduced-order time integration.
+efr:
+  filter_start: 10.0    # required if this block is present, no default
+  chi: 0.04                # required if this block is present, no default
+  delta: 0.016667            # default: res_min (mesh-dependent refinement
+                               # length near the obstacle)
+
+output:
+  save_monolithic: true   # default: true -- writes the actual training-data
+                            # velocity/pressure snapshots to <stem>.bp
+  save_KE: true              # default: true -- kinetic energy time series,
+                               # saved to <stem>_KE.npz
+  save_liftdrag: false         # default: false -- drag/lift coefficients,
+                                 # saved to <stem>_liftdrag.npz
+  plot: false                    # default: false -- live paraview-viewable
+                                   # velocity/pressure dump via VTXWriter,
+                                   # to <stem>_viz/{u,p}.bp. Expensive I/O.

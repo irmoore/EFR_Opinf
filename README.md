@@ -33,7 +33,7 @@ to be compatible as of May 2026.
 
 Mesh/data/results paths (`Meshes/`, `NSE_data/`, `Results/`) are resolved via
 `src/efr_opinf/_paths.py`, which anchors them to the repository root based on
-the installed package's own location — not the current working directory. So
+the installed package's own location, not the current working directory. So
 scripts and notebooks under `examples/` can be run from anywhere:
 
 ```bash
@@ -50,15 +50,34 @@ exit
 
 This functions almost identically to a conda environment. 
 
+### Running notebooks
+
+The default environment does not include `pip`, `ipykernel`, or `notebook`,
+so it can't run Jupyter notebooks (e.g. `examples/EFR_Opinf_script.ipynb`)
+out of the box. These are kept out of the default install to avoid bloating
+envs that only run scripts. Instead, use the `notebook` (pixi) environment,
+which layers `pip`, `ipykernel`, and `notebook` on top of the full default
+environment (defined in `pyproject.toml` under
+`[tool.pixi.feature.notebook.dependencies]` and `[tool.pixi.environments]`,
+sharing the same solve-group, so package versions stay identical between the
+two):
+
+```bash
+pixi shell -e notebook
+jupyter notebook
+```
+
 ## Package layout
 
-- `src/efr_opinf/_paths.py` — `PROJECT_ROOT`, `MESH_DIR`, `DATA_DIR`, `RESULTS_DIR`
+- `src/efr_opinf/_paths.py`: `PROJECT_ROOT`, `MESH_DIR`, `DATA_DIR`, `RESULTS_DIR`
   constants, anchored to the package's own location so path resolution doesn't
   depend on the current working directory.
-- `src/efr_opinf/interfaces/` — This code interfaces between FEniCSx and OpInf. The classes in here handle
+- `src/efr_opinf/interfaces/`: This code interfaces between FEniCSx and OpInf. The classes in here handle
 passing data between them and performing FE calculations. `nse.py` and `cdr.py` are used for the flow past a cylinder and convection diffusion examples respectively.  
-- `src/efr_opinf/rom/` — Operator Inference reduced-order models built on top of
+- `src/efr_opinf/rom/`: Operator Inference reduced-order models built on top of
   the interfaces above. Again, there is an option for NSE and CDR. 
-- `src/efr_opinf/fom/` — Data collection for full-order-model Navier-Stokes cylinder flow.
-- `examples/` — standalone experiment scripts and notebooks.
-- `Meshes/` — mesh files used by the examples. CDR is saved, NSE will be generated on the fly. 
+- `src/efr_opinf/fom/`: Data collection for full-order-model Navier-Stokes cylinder flow.
+- `examples/`: standalone experiment scripts and notebooks.
+- `Meshes/`: mesh files used by the examples. CDR is saved, NSE will be generated on the fly. 
+- `Results/`: Stores all results, organized by problem and parameters. Has a gitignore to prevent commiting images or data files. 
+- `NSE_data/`: NSE results use data which is computed once, then loaded. This is expensive. There is also a gitignore here to prevent committing data files. 

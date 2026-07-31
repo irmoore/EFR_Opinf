@@ -26,10 +26,16 @@ adios4dolfinx = "==0.10.0.post0"
 pyvista = "==0.48.4"
 scipy = "==1.18.0"
 tqdm = "==4.70.0"
-ipykernel = "*"
+pyyaml = "*"
 
 [tool.pixi.pypi-dependencies]
 efr-opinf = { path = ".", editable = true }
 
+[tool.pixi.feature.notebook.dependencies]
+pip = "*"
+ipykernel = "*"
+notebook = "*"
+
 [tool.pixi.environments]
 default = { solve-group = "default" }
+notebook = { features = ["notebook"], solve-group = "default" }
