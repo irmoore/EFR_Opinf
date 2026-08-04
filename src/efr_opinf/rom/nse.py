@@ -4,9 +4,11 @@ from pathlib import Path
 from efr_opinf._paths import PROJECT_ROOT, DATA_DIR
 import opinf
 import itertools
+import random
 import time
 
 from efr_opinf.interfaces.nse import fenicsx_class
+from efr_opinf.fom.registry import find_fom_data
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
@@ -197,7 +199,8 @@ class OpInf_ROM:
         """  opinf_dict = {
         "time_start": 2.0,
         "time_end": 5.0,
-        "predict_time": 10.0,
+        "validate_time": 8.0,
+        "test_time": 10.0,
         "r": 20,
         "centering": False,
         "datapath": data_dir,
@@ -211,8 +214,8 @@ class OpInf_ROM:
         self._setup_opinf_ROM()
 
     def compare_filter(self, RK_filter_solver: RK_solvers, timestep: float, directory: Path, filename: str, filter_type = "Projection"):
-        data_source = self.train_and_predict_data
-        data_times = self.predict_times
+        data_source = self.full_data
+        data_times = self.test_times
 
         time_idx = np.argmin(np.abs(data_times - timestep))
 
@@ -251,31 +254,27 @@ class OpInf_ROM:
 
         fenicsx_interface.save_functions_at_timestep(timestep, func_list, directory, filename)
 
-    def compute_FOM_KE(self):
-        time_predict_idx = self.time_predict_idx
+    def compute_FOM_KE(self, up_to_idx, times):
         fom_sol_list = self.fom_sol_list
-        predict_times = self.predict_times
         fenicsx_interface = self.fenicsx_interface
 
-
-        fenicsx_sol_list = fom_sol_list[0:time_predict_idx]
+        fenicsx_sol_list = fom_sol_list[0:up_to_idx]
         fenicsx_KE_array = fenicsx_interface.compute_KE_arr(fenicsx_sol_list)
 
-        return predict_times, fenicsx_KE_array
+        return times, fenicsx_KE_array
     
     def convert_lumped_data_to_FE_function_list(self, recon_data):
         fenicsx_interface = self.fenicsx_interface
         rom_sol_list = fenicsx_interface.lumped_data_to_FE_function_list(recon_data)
         return rom_sol_list
     
-    def compute_ROM_KE(self, recon_data_function_list, verbose = False):
-        
-        predict_times = self.predict_times
+    def compute_ROM_KE(self, recon_data_function_list, times, verbose = False):
+
         fenicsx_interface = self.fenicsx_interface
 
         rom_KE_array = fenicsx_interface.compute_KE_arr(recon_data_function_list, verbose)
 
-        return predict_times, rom_KE_array
+        return times, rom_KE_array
 
     def reconstruct_ROM_sol(self, QROM):
         transformer = self.transformer
@@ -338,7 +337,9 @@ class OpInf_ROM:
 
         time_start = self.time_start
         time_end = self.time_end
-        predict_time = self.predict_time
+        validate_time = self.validate_time
+        test_time = self.test_time
+        assert validate_time <= test_time, "validate_time must be <= test_time"
 
         fenicsx_interface = self.fenicsx_interface
 
@@ -348,32 +349,36 @@ class OpInf_ROM:
             print(f'warning: closest timestep to requested train start of {time_start} is NSE_times[time_start_idx]')
         time_end_idx = np.argmin(np.abs(NSE_times - time_end)) + 1
 
-        time_predict_idx = np.argmin(np.abs(NSE_times - predict_time))+1
+        time_test_idx = np.argmin(np.abs(NSE_times - test_time))+1
 
-        extract_times = NSE_times[time_start_idx: time_predict_idx]
+        extract_times = NSE_times[time_start_idx: time_test_idx]
 
-        fom_sol_list = data[time_start_idx:time_predict_idx]
+        fom_sol_list = data[time_start_idx:time_test_idx]
 
-        train_and_predict_data = fenicsx_interface.FE_function_list_to_arr(fom_sol_list)
+        full_data = fenicsx_interface.FE_function_list_to_arr(fom_sol_list)
 
         time_start_idx = np.argmin(np.abs(extract_times - time_start))
         time_end_idx = np.argmin(np.abs(extract_times - time_end)) + 1
 
-        time_predict_idx = np.argmin(np.abs(extract_times - predict_time))+1
+        time_validate_idx = np.argmin(np.abs(extract_times - validate_time))+1
+        time_test_idx = np.argmin(np.abs(extract_times - test_time))+1
 
         train_times = extract_times[time_start_idx:time_end_idx]
-        train_data = train_and_predict_data[:, time_start_idx:time_end_idx]
-        predict_times = extract_times[time_start_idx:time_predict_idx]
+        train_data = full_data[:, time_start_idx:time_end_idx]
+        validate_times = extract_times[time_start_idx:time_validate_idx]
+        test_times = extract_times[time_start_idx:time_test_idx]
 
         self.fom_sol_list = fom_sol_list
         self.train_times = train_times
         self.train_data = train_data
-        self.predict_times = predict_times
-        self.train_and_predict_data = train_and_predict_data
+        self.validate_times = validate_times
+        self.test_times = test_times
+        self.full_data = full_data
 
         self.time_start_idx = time_start_idx
         self.time_end_idx = time_end_idx
-        self.time_predict_idx = time_predict_idx
+        self.time_validate_idx = time_validate_idx
+        self.time_test_idx = time_test_idx
 
     def update_model_regularization(self, beta1, beta2):
         operators = self.opinf_model.operators
@@ -403,7 +408,6 @@ class OpInf_ROM:
         operators = opinf_model.operators
         time_integrator = self.time_integrator
         r = self.r
-        predict_times = self.predict_times
 
         B1 = np.logspace(linear_min, linear_max, num=linear_num)
         B2 = np.logspace(quadratic_min, quadratic_max, num=quadratic_num)
@@ -413,6 +417,8 @@ class OpInf_ROM:
 
         # Set the threshold for the maximum growth of the inferred reduced
         # coefficients, used for selecting the optimal regularization parameter pair.
+        # Checked only within train_times -- this method never looks past
+        # the end of training, unlike optimize_model().
         max_growth = 1.2
 
 
@@ -429,10 +435,10 @@ class OpInf_ROM:
             tikreg = self.opinf_model.solver.get_operator_regularizer(operators, reg_list, r)
             self.opinf_model.solver.regularizer = tikreg
             solver.regularizer = tikreg
-            try: 
+            try:
                 opinf_model.refit()
             except:
-                continue        
+                continue
             u0 = comp_data[:,0]
             Q_ROM = time_integrator.solve(opinf_model, u0, train_times)
 
@@ -442,16 +448,14 @@ class OpInf_ROM:
             if Q_ROM.shape[1] != comp_data.shape[1]:
                 continue # if integration failed, go to next iteration
 
-            Q_ROM_predict = time_integrator.solve(opinf_model, u0, predict_times)
-
             max_diff_Qhat_trial = np.max(
-                np.abs(Q_ROM_predict - mean_Qhat_train[:,np.newaxis]), axis=1
+                np.abs(Q_ROM - mean_Qhat_train[:,np.newaxis]), axis=1
             )
             max_growth_trial = np.max(max_diff_Qhat_trial) / np.max(
                 max_diff_Qhat_train
             )
             if max_growth_trial > max_growth:
-                continue 
+                continue
 
             abs_e, rel_e = opinf.post.lp_error(comp_data,Q_ROM, p = 2)
             train_err = np.mean(rel_e)
@@ -465,7 +469,7 @@ class OpInf_ROM:
         self.best_beta2 = best_beta2
         self.Q_ROM_opt = Q_ROM_opt
         print(
-            f"Optimal regularization parameters: Linear Regularizer = {best_beta1}, Quadratic Regularizer = {best_beta2} with training error = {np.mean(best_train_err):.2e}" 
+            f"Optimal regularization parameters: Linear Regularizer = {best_beta1}, Quadratic Regularizer = {best_beta2} with training error = {np.mean(best_train_err):.2e}"
         )
 
     def optimize_model(self, linear_dict, quadratic_dict):
@@ -486,7 +490,7 @@ class OpInf_ROM:
         operators = opinf_model.operators
         time_integrator = self.time_integrator
         r = self.r
-        predict_times = self.predict_times
+        validate_times = self.validate_times
 
         B1 = np.logspace(linear_min, linear_max, num=linear_num)
         B2 = np.logspace(quadratic_min, quadratic_max, num=quadratic_num)
@@ -525,16 +529,16 @@ class OpInf_ROM:
             if Q_ROM.shape[1] != comp_data.shape[1]:
                 continue # if integration failed, go to next iteration
 
-            Q_ROM_predict = time_integrator.solve(opinf_model, u0, predict_times)
+            Q_ROM_validate = time_integrator.solve(opinf_model, u0, validate_times)
 
             max_diff_Qhat_trial = np.max(
-                np.abs(Q_ROM_predict - mean_Qhat_train[:,np.newaxis]), axis=1
+                np.abs(Q_ROM_validate - mean_Qhat_train[:,np.newaxis]), axis=1
             )
             max_growth_trial = np.max(max_diff_Qhat_trial) / np.max(
                 max_diff_Qhat_train
             )
             if max_growth_trial > max_growth:
-                continue 
+                continue
 
             abs_e, rel_e = opinf.post.lp_error(comp_data,Q_ROM, p = 2)
             train_err = np.mean(rel_e)
@@ -548,25 +552,64 @@ class OpInf_ROM:
         self.best_beta2 = best_beta2
         self.Q_ROM_opt = Q_ROM_opt
         print(
-            f"Optimal regularization parameters: Linear Regularizer = {best_beta1}, Quadratic Regularizer = {best_beta2} with training error = {np.mean(best_train_err):.2e}" 
+            f"Optimal regularization parameters: Linear Regularizer = {best_beta1}, Quadratic Regularizer = {best_beta2} with training error = {np.mean(best_train_err):.2e}"
         )
 
-    def check_EFR_chi(self, trained_opinf_model: opinf.models.ContinuousModel, u0: np.ndarray, chi_list: np.ndarray, solver: RK_solvers, run_times: np.ndarray, max_growth =  None):
+    def optimize_EFR_validate(self, trained_opinf_model: opinf.models.ContinuousModel, u0: np.ndarray,
+                       validate_times: np.ndarray, base_filter_dict: dict, chi_list: np.ndarray,
+                       delta_list: np.ndarray = None, r_restriction_list: np.ndarray = None,
+                       max_growth: float = None, selection: str = "most_stable") -> dict:
+        """Select EFR filter parameters by stability alone -- no FOM ground truth involved.
+
+        Every combination of chi (always) x delta/r_restriction (as required by
+        base_filter_dict["filter_method"]) is integrated over validate_times and
+        checked for blow-up relative to the training data's own spread.
+        Candidates whose growth exceeds max_growth are discarded; `selection`
+        picks among the survivors:
+          - "most_stable": smallest growth factor
+          - "first" / "last": first/last candidate in grid order
+          - "random": uniformly random among survivors
+
+        base_filter_dict must supply everything RK_solvers needs except the
+        swept parameter(s): filtering, dt, filter_method, filter_time, basis,
+        mean_func, include_mean, fenicsx_interface. Required sweep lists by
+        filter_method:
+          - "Projection": r_restriction_list (delta_list unused)
+          - "Differential": delta_list (r_restriction_list unused)
+          - "Differential_Partial": both delta_list and r_restriction_list
+
+        Returns a complete filter_dict with the chosen parameters filled in.
+        """
+        filter_method = base_filter_dict["filter_method"]
         comp_data = self.comp_data
         mean_Qhat_train = np.mean(comp_data, axis=1)
-        #predict_times = self.predict_times
-
-        best_growth = 10.0
         max_diff_Qhat_train = np.max(np.abs(comp_data - mean_Qhat_train[:,np.newaxis]), axis=1)
 
         if max_growth is None:
-            max_growth = 1.2 
+            max_growth = 1.2
             print("Defaulting to max growth factor of 1.2")
-        acceptable_chi = 0.5
 
-        for chi in chi_list:
-            solver.update_chi_only(chi)
-            Q_ROM = solver.solve(trained_opinf_model, u0, run_times)
+        if filter_method == "Projection":
+            assert r_restriction_list is not None, "Projection filtering requires r_restriction_list"
+            param_combos = [{"chi": chi, "r_restriction": r_restriction}
+                             for r_restriction in r_restriction_list for chi in chi_list]
+        elif filter_method == "Differential":
+            assert delta_list is not None, "Differential filtering requires delta_list"
+            param_combos = [{"chi": chi, "delta": delta}
+                             for delta in delta_list for chi in chi_list]
+        elif filter_method == "Differential_Partial":
+            assert delta_list is not None and r_restriction_list is not None, \
+                "Differential_Partial filtering requires delta_list and r_restriction_list"
+            param_combos = [{"chi": chi, "delta": delta, "r_restriction": r_restriction}
+                             for r_restriction in r_restriction_list for delta in delta_list for chi in chi_list]
+        else:
+            raise ValueError("filter_method must be one of `Projection`, `Differential`, `Differential_Partial`")
+
+        candidates = []
+        for params in param_combos:
+            filter_dict = {**base_filter_dict, **params}
+            solver = RK_solvers(filter_dict)
+            Q_ROM = solver.solve(trained_opinf_model, u0, validate_times)
 
             if np.any(np.isnan(Q_ROM)):
                 continue  # go to next iteration of the for loop.
@@ -577,16 +620,28 @@ class OpInf_ROM:
             max_diff_Qhat_trial = np.max(
                 np.abs(Q_ROM - mean_Qhat_train[:,np.newaxis]), axis=1
             )
-            max_growth_trial = np.max(max_diff_Qhat_trial) / np.max(
-                max_diff_Qhat_train)
-            
-            if max_growth_trial < max_growth:
-                acceptable_chi = chi
-                break
+            growth = np.max(max_diff_Qhat_trial) / np.max(max_diff_Qhat_train)
 
-        if best_growth >= 10.0:
-            print("No acceptable chi values found!")
-        return acceptable_chi
+            if growth < max_growth:
+                candidates.append((params, growth))
+
+        if not candidates:
+            raise RuntimeError(
+                f"No acceptable {filter_method} filter parameters found under max_growth={max_growth}"
+            )
+
+        if selection == "most_stable":
+            best_params, _ = min(candidates, key=lambda c: c[1])
+        elif selection == "first":
+            best_params, _ = candidates[0]
+        elif selection == "last":
+            best_params, _ = candidates[-1]
+        elif selection == "random":
+            best_params, _ = random.choice(candidates)
+        else:
+            raise ValueError("selection must be one of `most_stable`, `first`, `last`, `random`")
+
+        return {**base_filter_dict, **best_params}
 
     def save_basis_funcs(self, indices: list[int], directory: Path, filename):
         basis = self.basis
@@ -616,17 +671,20 @@ class OpInf_ROM:
 
         fenicsx_interface.save_functions_at_timestep(0.0, func_list, directory, filename)
 
-    def plot_KE(self, FOM_KE_times: np.ndarray, ROM_KE_times: np.ndarray, FOM_KE: np.ndarray, ROM_KE: np.ndarray, 
-                train_times: np.ndarray, savefolder: Path, identification: str):
+    def plot_KE(self, FOM_KE_times: np.ndarray, ROM_KE_times: np.ndarray, FOM_KE: np.ndarray, ROM_KE: np.ndarray,
+                train_times: np.ndarray, savefolder: Path, identification: str, validate_times: np.ndarray = None):
         fig, ax = plt.subplots()
         ax.plot(FOM_KE_times, FOM_KE, label='FOM KE', color='black')
         ax.plot(ROM_KE_times, ROM_KE, label='OpInf KE', color='red')
         ax.set_ylim(0.5, 0.7)
         if not np.isclose(ROM_KE_times[-1], train_times[-1]): # means we are in predictive regime
             last_train_time = train_times[-1]
-            ax.axvline(x=last_train_time, color='blue', linestyle='--', label='End of training data')
+            ax.axvline(x=last_train_time, color='blue', linestyle='--', label='End of training region')
+        if validate_times is not None and not np.isclose(ROM_KE_times[-1], validate_times[-1]):
+            last_validate_time = validate_times[-1]
+            ax.axvline(x=last_validate_time, color='purple', linestyle='--', label='End of validation region')
         if (FOM_KE_times[-1] + (FOM_KE_times[1] - FOM_KE_times[0])) < ROM_KE_times[-1]: # IF final FOM time + dt < final ROM time
-            ax.axvline(x=FOM_KE_times[-1], color='purple', linestyle='--', label='End of FOM data')
+            ax.axvline(x=FOM_KE_times[-1], color='gray', linestyle='--', label='End of FOM data')
             identification += f"_extended_time_{ROM_KE_times[-1]}_"
         ax.set_xlabel('Time')
         ax.set_ylabel('Kinetic Energy')
@@ -691,9 +749,9 @@ if __name__ == "__main__":
 
     # mesh_file = str(Mesh_fld) + "/BFS_Mesh"
 
-    data_fld = DATA_DIR / "Cylinder"
-    #data_file = data_fld / "NSE_save_data.bp"
-    data_file = data_fld / "NSE_snaps_gap_10_quads_T_10.bp"
+    validate_time = 10.0
+    test_time = 20.0
+    data_file = find_fom_data(min_T=test_time)
     fenicsx_interface = fenicsx_class(data_file, time_start = 4.0)
 
     dt = fenicsx_interface._dt
@@ -713,7 +771,8 @@ if __name__ == "__main__":
         opinf_dict = {
             "time_start": 4.0,
             "time_end": 6.0,
-            "predict_time":10.0,
+            "validate_time": validate_time,
+            "test_time": test_time,
             "r": r,
             "centering": True,
             "datapath": data_dir,
@@ -775,26 +834,15 @@ if __name__ == "__main__":
 
         
         
-        RK4_filter_solver = RK_solvers(filter_dict)
-
         opinf_model = opinf_ROM.opinf_model
-        predict_times = opinf_ROM.predict_times
+        validate_times = opinf_ROM.validate_times
         train_times = opinf_ROM.train_times
-
-        if train_times[-1] != predict_times[-1]:
-            is_prediction = True
-
-        FOM_KE_times, FOM_KE = opinf_ROM.compute_FOM_KE()
-
         u0 = opinf_ROM.u0
 
-        Q_ROM = RK4_filter_solver.solve(opinf_model, u0, predict_times)
-        recon_data = opinf_ROM.reconstruct_ROM_sol(Q_ROM)
-        ROM_sol_list = opinf_ROM.convert_lumped_data_to_FE_function_list(recon_data)
-        ROM_KE_times, ROM_KE = opinf_ROM.compute_ROM_KE(ROM_sol_list)
+        if train_times[-1] != validate_times[-1]:
+            is_prediction = True
 
-        best_KE_err = np.linalg.norm((FOM_KE - ROM_KE))/np.linalg.norm(FOM_KE)
-
+        FOM_KE_times, FOM_KE = opinf_ROM.compute_FOM_KE(opinf_ROM.time_validate_idx, validate_times)
 
         #### Extended_times
         # dt = RK4_filter_solver.dt
@@ -809,54 +857,58 @@ if __name__ == "__main__":
         # _, ROM_KE = opinf_ROM.compute_ROM_KE(ROM_sol_list)
         # ROM_KE_times = extended_times
 
-
-        
-
-        chi_list = np.logspace(-2,0,15)
-        delta_list = np.logspace(-2,-1,10)
-        best_chi = filter_dict["chi"]
-        best_delta = filter_dict["delta"]
-        KE_opt = ROM_KE
-        best_filter_dict = filter_dict
-
-        filter_pairs_global = list(itertools.product(chi_list, delta_list))
-
-        for chi, delta in tqdm(filter_pairs_global):
-    
-            filter_dict = {"filtering": True,
+        # Select EFR filter parameters by stability only (see optimize_EFR_validate
+        # docstring) -- no FOM ground truth is consulted, matching how beta1/beta2
+        # are chosen in optimize_model/optimize_model_training.
+        base_filter_dict = {"filtering": True,
                     "dt": dt,
                     "filter_method": "Differential_Partial",
-                    "r_restriction": 10,
-                    "delta": delta,
-                    "chi": chi,
                     "basis": opinf_ROM.basis,
                     "mean_func": mean_func,
                     "include_mean": False,
                     "fenicsx_interface": fenicsx_interface,
                     "filter_time": 6.0}
-            
-            RK4_filter_solver = RK_solvers(filter_dict)
-            
-            Q_ROM = RK4_filter_solver.solve(opinf_model, u0, predict_times)
-            recon_data = opinf_ROM.reconstruct_ROM_sol(Q_ROM)
-            ROM_sol_list = opinf_ROM.convert_lumped_data_to_FE_function_list(recon_data)
-            ROM_KE_times, ROM_KE = opinf_ROM.compute_ROM_KE(ROM_sol_list)
 
-            KE_err = np.linalg.norm((FOM_KE - ROM_KE))/np.linalg.norm(FOM_KE)
-            if KE_err < best_KE_err:
-                KE_opt = ROM_KE
-                best_KE_err = KE_err
-                best_chi = chi
-                best_delta = delta
-                best_filter_dict = filter_dict
-        print(f"For r = {r}, Best delta is {best_delta}, best chi is {best_chi}. ")
+        chi_list = np.logspace(-2,0,15)
+        delta_list = np.logspace(-2,-1,10)
+        r_restriction_list = [10]
+
+        best_filter_dict = opinf_ROM.optimize_EFR_validate(
+            opinf_model, u0, validate_times, base_filter_dict,
+            chi_list=chi_list, delta_list=delta_list, r_restriction_list=r_restriction_list,
+        )
+        print(f"For r = {r}, selected filter parameters: chi={best_filter_dict['chi']}, "
+              f"delta={best_filter_dict.get('delta')}, r_restriction={best_filter_dict.get('r_restriction')}")
 
         savefolder, identification = opinf_ROM.setup_save_folder(cwd, dt, r, best_filter_dict)
 
-
-        
+        RK4_filter_solver = RK_solvers(best_filter_dict)
+        Q_ROM = RK4_filter_solver.solve(opinf_model, u0, validate_times)
+        recon_data = opinf_ROM.reconstruct_ROM_sol(Q_ROM)
+        ROM_sol_list = opinf_ROM.convert_lumped_data_to_FE_function_list(recon_data)
+        ROM_KE_times, KE_opt = opinf_ROM.compute_ROM_KE(ROM_sol_list, validate_times)
 
         opinf_ROM.plot_KE(FOM_KE_times, ROM_KE_times, FOM_KE, KE_opt, train_times, savefolder, identification)
+
+        # --- Held-out test evaluation ---
+        # Uses the (beta1, beta2, chi, delta) chosen above from validation-only
+        # comparisons. This error must never feed back into any best_* selection.
+        test_times = opinf_ROM.test_times
+        best_RK4_filter_solver = RK_solvers(best_filter_dict)
+
+        FOM_KE_test_times, FOM_KE_test = opinf_ROM.compute_FOM_KE(opinf_ROM.time_test_idx, test_times)
+
+        Q_ROM_test = best_RK4_filter_solver.solve(opinf_model, u0, test_times)
+        recon_data_test = opinf_ROM.reconstruct_ROM_sol(Q_ROM_test)
+        ROM_sol_list_test = opinf_ROM.convert_lumped_data_to_FE_function_list(recon_data_test)
+        ROM_KE_test_times, ROM_KE_test = opinf_ROM.compute_ROM_KE(ROM_sol_list_test, test_times)
+
+        test_tail_mask = test_times >= validate_time
+        test_KE_err = np.linalg.norm(FOM_KE_test[test_tail_mask] - ROM_KE_test[test_tail_mask]) / np.linalg.norm(FOM_KE_test[test_tail_mask])
+        print(f"For r = {r}, held-out test KE error (t >= {validate_time}) is {test_KE_err:.2e}")
+
+        opinf_ROM.plot_KE(FOM_KE_test_times, ROM_KE_test_times, FOM_KE_test, ROM_KE_test,
+                           train_times, savefolder, identification + "_test", validate_times=validate_times)
 
         # fenicsx_interface.setup_pressure()
 
