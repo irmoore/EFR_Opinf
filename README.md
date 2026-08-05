@@ -50,23 +50,6 @@ exit
 
 This functions almost identically to a conda environment. 
 
-### Running notebooks
-
-The default environment does not include `pip`, `ipykernel`, or `notebook`,
-so it can't run Jupyter notebooks (e.g. `examples/EFR_Opinf_script.ipynb`)
-out of the box. These are kept out of the default install to avoid bloating
-envs that only run scripts. Instead, use the `notebook` (pixi) environment,
-which layers `pip`, `ipykernel`, and `notebook` on top of the full default
-environment (defined in `pyproject.toml` under
-`[tool.pixi.feature.notebook.dependencies]` and `[tool.pixi.environments]`,
-sharing the same solve-group, so package versions stay identical between the
-two):
-
-```bash
-pixi shell -e notebook
-jupyter notebook
-```
-
 ## Package layout
 
 - `src/efr_opinf/_paths.py`: `PROJECT_ROOT`, `MESH_DIR`, `DATA_DIR`, `RESULTS_DIR`
@@ -79,5 +62,5 @@ passing data between them and performing FE calculations. `nse.py` and `cdr.py` 
 - `src/efr_opinf/fom/`: Data collection for full-order-model Navier-Stokes cylinder flow.
 - `examples/`: standalone experiment scripts and notebooks.
 - `Meshes/`: mesh files used by the examples. CDR is saved, NSE will be generated on the fly. 
-- `Results/`: Stores all results, organized by problem and parameters. Has a gitignore to prevent commiting images or data files. 
-- `NSE_data/`: NSE results use data which is computed once, then loaded. This is expensive. There is also a gitignore here to prevent committing data files. 
+- `Results/`: Stores all results, organized by problem and parameters. 
+- `NSE_data/`: NSE results use data which is computed once, then loaded. This is expensive. 

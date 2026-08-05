@@ -1,0 +1,8 @@
+time:
+  train_start: 4.0
+  train_end: 6.0
+  validate_time: 10.0
+  test_time: 20.0
+
+rom:
+  r_list: [20]

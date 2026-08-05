@@ -1,0 +1,37 @@
+# Reference config showing every option run_nse_rom() understands, with its
+# default value noted. Only the four time.* fields are required -- see
+# nse_r20.yaml for a minimal example.
+
+time:
+  train_start: 4.0        # required -- also used as the FOM-data load start
+  train_end: 6.0            # required
+  validate_time: 10.0         # required -- must be >= train_end
+  test_time: 20.0               # required -- must be >= validate_time.
+                                  # find_fom_data(min_T=test_time) resolves
+                                  # the FOM snapshot file to load.
+
+rom:
+  r_list: [20]              # default: [20]. ROM dimensions to sweep -- one
+                              # full train/validate/test pass per r.
+  centering: true             # default: true
+
+regularization:
+  reuse_cached: False          # default: false. If an optimal_reg_parameters.json
+                                # already exists for (dt, r), load beta1/beta2
+                                # from it instead of recomputing. Set false to
+                                # force a fresh optimize_model() search.
+  linear: {min: -5, max: 2, num: 15}      # default shown -- logspace bounds/count
+  quadratic: {min: -2, max: 4, num: 10}    # default shown
+
+filter:
+  method: "Differential_Partial"   # default: "Differential_Partial".
+                                     # Projection | Differential | Differential_Partial
+  filter_time: 6.0                   # default: 6.0
+  include_mean: false                 # default: false
+  chi_list: {min: -2, max: 0, num: 15}      # default shown -- always used
+  delta_list: {min: -2, max: -1, num: 10}    # required unless method is "Projection"
+  r_restriction_list: [10]                    # required unless method is "Differential"
+  selection: "most_stable"                     # default: "most_stable".
+                                                 # most_stable | first | last | random
+  max_growth: 1.2                                # default: 1.2 (applied internally
+                                                    # if omitted)

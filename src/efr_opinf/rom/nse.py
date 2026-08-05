@@ -1,4 +1,6 @@
+import argparse
 import numpy as np
+import yaml
 from pathlib import Path
 
 from efr_opinf._paths import PROJECT_ROOT, DATA_DIR
@@ -509,7 +511,7 @@ class OpInf_ROM:
 
         mean_Qhat_train = np.mean(comp_data, axis=1)
         max_diff_Qhat_train = np.max(np.abs(comp_data - mean_Qhat_train[:,np.newaxis]), axis=1)
-        for beta1, beta2 in tqdm(reg_pairs_global, desc = "Optimizing Regularization Within Training Data"):
+        for beta1, beta2 in tqdm(reg_pairs_global, desc = "Optimizing Regularization Through Validation Region"):
             reg_list = [beta1, beta2]
             if self.transformer.centering:
                 reg_list.append(beta1)
@@ -530,6 +532,12 @@ class OpInf_ROM:
                 continue # if integration failed, go to next iteration
 
             Q_ROM_validate = time_integrator.solve(opinf_model, u0, validate_times)
+
+            if np.any(np.isnan(Q_ROM_validate)):
+                continue  # go to next iteration of the for loop.
+
+            if Q_ROM_validate.shape[1] != validate_times.shape[0]:
+                continue # if integration failed, go to next iteration
 
             max_diff_Qhat_trial = np.max(
                 np.abs(Q_ROM_validate - mean_Qhat_train[:,np.newaxis]), axis=1
@@ -614,7 +622,7 @@ class OpInf_ROM:
             if np.any(np.isnan(Q_ROM)):
                 continue  # go to next iteration of the for loop.
 
-            if Q_ROM.shape[1] != comp_data.shape[1]:
+            if Q_ROM.shape[1] != validate_times.shape[0]:
                 continue # if integration failed, go to next iteration
 
             max_diff_Qhat_trial = np.max(
@@ -692,17 +700,19 @@ class OpInf_ROM:
         ax.legend()
         fig.savefig(savefolder / ("Opinf_KE" + identification + ".png") )
 
-    def setup_save_folder(self,cwd, dt, r, filter_dict) -> typing.Tuple[Path, str]:
+    def _get_standard_opinf_folder(self, cwd, dt, r) -> Path:
         result_folder = cwd / "Results"
         if not result_folder.exists():
             result_folder.mkdir()
-
-        
 
         standard_opinf_folder = result_folder / "Continuous_OpInf_Results_Quads" / "Cylinder" / f"dt_{dt.round(6)}"/f"r_{r}"
         if not standard_opinf_folder.exists():
             standard_opinf_folder.mkdir(parents= True)
 
+        return standard_opinf_folder
+
+    def setup_save_folder(self,cwd, dt, r, filter_dict) -> typing.Tuple[Path, str]:
+        standard_opinf_folder = self._get_standard_opinf_folder(cwd, dt, r)
         savefolder = standard_opinf_folder
 
         identification = "_standard_"
@@ -739,20 +749,51 @@ class OpInf_ROM:
         return savefolder, identification
 
 
-if __name__ == "__main__":
+def load_config(path: Path) -> dict:
+    with open(path) as f:
+        config = yaml.safe_load(f)
+    time_cfg = config.get("time", {})
+    for key in ("train_start", "train_end", "validate_time", "test_time"):
+        if key not in time_cfg:
+            raise ValueError(f"YAML config must specify time.{key}")
+    return config
+
+
+def _logspace_from_dict(d: dict) -> np.ndarray:
+    return np.logspace(d["min"], d["max"], num=d["num"])
+
+
+def run_nse_rom(config: dict):
     cwd = PROJECT_ROOT
     data_dir = DATA_DIR
 
+    time_cfg = config["time"]
+    train_start = time_cfg["train_start"]
+    train_end = time_cfg["train_end"]
+    validate_time = time_cfg["validate_time"]
+    test_time = time_cfg["test_time"]
 
-    # Mesh_fld = MESH_DIR
-    # Mesh_fld.mkdir(exist_ok = True)
+    rom_cfg = config.get("rom", {})
+    r_list = rom_cfg.get("r_list", [20])
+    centering = rom_cfg.get("centering", True)
 
-    # mesh_file = str(Mesh_fld) + "/BFS_Mesh"
+    reg_cfg = config.get("regularization", {})
+    reuse_cached_reg = reg_cfg.get("reuse_cached", False)
+    linear_reg = reg_cfg.get("linear", {"min": -5, "max": 2, "num": 15})
+    quad_reg = reg_cfg.get("quadratic", {"min": -2, "max": 4, "num": 10})
 
-    validate_time = 10.0
-    test_time = 20.0
+    filter_cfg = config.get("filter", {})
+    filter_method = filter_cfg.get("method", "Differential_Partial")
+    filter_time = filter_cfg.get("filter_time", 6.0)
+    include_mean = filter_cfg.get("include_mean", False)
+    chi_list = _logspace_from_dict(filter_cfg.get("chi_list", {"min": -2, "max": 0, "num": 15}))
+    delta_list = _logspace_from_dict(filter_cfg["delta_list"]) if "delta_list" in filter_cfg else None
+    r_restriction_list = filter_cfg.get("r_restriction_list")
+    selection = filter_cfg.get("selection", "most_stable")
+    max_growth = filter_cfg.get("max_growth")
+
     data_file = find_fom_data(min_T=test_time)
-    fenicsx_interface = fenicsx_class(data_file, time_start = 4.0)
+    fenicsx_interface = fenicsx_class(data_file, time_start=train_start)
 
     dt = fenicsx_interface._dt
 
@@ -760,122 +801,75 @@ if __name__ == "__main__":
                 "dt": dt,
                 }
 
-
     RK4_solver = RK_solvers(RK4_dict)
 
-    rlist = [20]
-
-    for r in rlist:
-    #r = 20
-
+    for r in r_list:
         opinf_dict = {
-            "time_start": 4.0,
-            "time_end": 6.0,
+            "time_start": train_start,
+            "time_end": train_end,
             "validate_time": validate_time,
             "test_time": test_time,
             "r": r,
-            "centering": True,
+            "centering": centering,
             "datapath": data_dir,
             "time_integrator": RK4_solver,
             "fenicsx_interface": fenicsx_interface
         }
 
         opinf_ROM = OpInf_ROM(opinf_dict)
-        if opinf_dict["centering"] == True:
+        mean_func = None
+        if centering:
             mean = opinf_ROM.transformer.mean_
             mean_func = fenicsx_interface.vector_to_func(mean)
 
-        filter_dict = {"filtering": True,
-                    "dt": dt,
-                    "filter_method": "Differential",
-                    "r_restriction": 10,
-                    "delta": 0.02,
-                    "chi": 0.04,
-                    "basis": opinf_ROM.basis,
-                    "mean_func": mean_func,
-                    "include_mean": False,
-                    "fenicsx_interface": fenicsx_interface,
-                    "filter_time": 6.0}
-        
-        savefolder, identification = opinf_ROM.setup_save_folder(cwd, dt, r, filter_dict)
+        # beta1/beta2 depend only on (dt, r, train window), never on filter
+        # choice, so they're cached above any filter-specific subfolder.
+        standard_opinf_folder = opinf_ROM._get_standard_opinf_folder(cwd, dt, r)
+        jsonfile = standard_opinf_folder / "optimal_reg_parameters.json"
 
-        linear_reg = {"min": -5,
-                    "max": 2,
-                    "num":15}
-        quad_reg = {"min": -2,
-                    "max": 4,
-                    "num": 10}
-        
-        jsonfile = savefolder / "optimal_reg_parameters.json"
-        if jsonfile.is_file():
-            
+        if reuse_cached_reg and jsonfile.is_file():
             with open(jsonfile, 'r') as f:
                 D = json.load(f)
                 beta1 = D["beta1"]
                 beta2 = D["beta2"]
                 opinf_ROM.update_model_regularization(beta1, beta2)
 
-        else: 
+        else:
             opinf_ROM.optimize_model(linear_reg, quad_reg)
-            
+
             beta1 = opinf_ROM.best_beta1
-            beta2 =  opinf_ROM.best_beta2
+            beta2 = opinf_ROM.best_beta2
             beta_dict = {"beta1": beta1,
                         "beta2": beta2}
             opinf_ROM.update_model_regularization(beta1, beta2)
             with open(jsonfile, 'w') as f:
                 json.dump(beta_dict, f, indent=4)
 
-        # beta1 = 0.01
-        # beta2 = 1
-        # opinf_ROM.update_model_regularization(beta1, beta2)
         print(f"Using regularization: Linear: {beta1}, Quadratic: {beta2}")
-        # opinf_ROM.update_model_regularization(0.03162277660168379, 1.0)
 
-        
-        
         opinf_model = opinf_ROM.opinf_model
         validate_times = opinf_ROM.validate_times
         train_times = opinf_ROM.train_times
         u0 = opinf_ROM.u0
 
-        if train_times[-1] != validate_times[-1]:
-            is_prediction = True
-
         FOM_KE_times, FOM_KE = opinf_ROM.compute_FOM_KE(opinf_ROM.time_validate_idx, validate_times)
-
-        #### Extended_times
-        # dt = RK4_filter_solver.dt
-        # t0 = predict_times[0]
-        # tf = 20.0
-        # num_steps = round((tf - t0)/dt)+1
-        # extended_times = np.linspace(t0,tf, num_steps)
-
-        # Q_ROM = RK4_filter_solver.solve(opinf_model, u0, extended_times)
-        # recon_data = opinf_ROM.reconstruct_ROM_sol(Q_ROM)
-        # ROM_sol_list = opinf_ROM.convert_lumped_data_to_FE_function_list(recon_data)
-        # _, ROM_KE = opinf_ROM.compute_ROM_KE(ROM_sol_list)
-        # ROM_KE_times = extended_times
 
         # Select EFR filter parameters by stability only (see optimize_EFR_validate
         # docstring) -- no FOM ground truth is consulted, matching how beta1/beta2
         # are chosen in optimize_model/optimize_model_training.
         base_filter_dict = {"filtering": True,
                     "dt": dt,
-                    "filter_method": "Differential_Partial",
+                    "filter_method": filter_method,
                     "basis": opinf_ROM.basis,
                     "mean_func": mean_func,
-                    "include_mean": False,
+                    "include_mean": include_mean,
                     "fenicsx_interface": fenicsx_interface,
-                    "filter_time": 6.0}
-
-        chi_list = np.logspace(-2,0,15)
-        delta_list = np.logspace(-2,-1,10)
-        r_restriction_list = [10]
+                    "filter_time": filter_time}
 
         best_filter_dict = opinf_ROM.optimize_EFR_validate(
             opinf_model, u0, validate_times, base_filter_dict,
             chi_list=chi_list, delta_list=delta_list, r_restriction_list=r_restriction_list,
+            max_growth=max_growth, selection=selection,
         )
         print(f"For r = {r}, selected filter parameters: chi={best_filter_dict['chi']}, "
               f"delta={best_filter_dict.get('delta')}, r_restriction={best_filter_dict.get('r_restriction')}")
@@ -910,10 +904,22 @@ if __name__ == "__main__":
         opinf_ROM.plot_KE(FOM_KE_test_times, ROM_KE_test_times, FOM_KE_test, ROM_KE_test,
                            train_times, savefolder, identification + "_test", validate_times=validate_times)
 
-        # fenicsx_interface.setup_pressure()
 
-        # ROM_drag_arr, ROM_lift_arr, ROM_velocity_times = fenicsx_interface.compute_liftdrag(ROM_sol_list, predict_times)
-        # FOM_drag_arr, FOM_lift_arr, FOM_velocity_times = fenicsx_interface.compute_liftdrag(ROM_sol_list, predict_times)
+def _cli():
+    parser = argparse.ArgumentParser(
+        description="Run the NSE OpInf ROM pipeline from a YAML config."
+    )
+    parser.add_argument(
+        "config", type=Path,
+        help="Path to a YAML config file (see examples/rom_configs/ for examples).",
+    )
+    args = parser.parse_args()
+    config = load_config(args.config)
+    run_nse_rom(config)
+
+
+if __name__ == "__main__":
+    _cli()
 
         # fig, ax = plt.subplots()
         # ax.plot(FOM_velocity_times, FOM_drag_arr, label='FOM Drag', color='black')
