@@ -50,6 +50,16 @@ exit
 
 This functions almost identically to a conda environment. 
 
+## How to reproduce paper results
+
+1. CDR: go to examples directory and run:
+
+```bash
+pixi run python examples/test_CDR_parametric.py
+```
+
+2. NSE FPC: Go to EFR_OpInf_script.ipynb. follow the instructions to generate FOM data and run the cells. 
+
 ## Package layout
 
 - `src/efr_opinf/_paths.py`: `PROJECT_ROOT`, `MESH_DIR`, `DATA_DIR`, `RESULTS_DIR`
