@@ -419,7 +419,7 @@ diffrential_part_color = 'coral'
 L2_compare_name = "L2_Errors" + standard_identification +  f'strong_reg_{strong_reg:.2e}' +  ".png"
 L2savepath = standard_savefolder / L2_compare_name
 
-fig, ax = plt.subplots()
+fig, ax = plt.subplots(figsize=(15, 5))
 ax.semilogy(predict_times, standard_rel_e, label = "Unregularized OpInf", color = weak_opinf_color)
 ax.semilogy(predict_times, strong_rel_e, label = "Strongly Reg. OpInf", color = strong_opinf_color)
 ax.semilogy(predict_times, proj_rel_e, label = "EFR-OpInf-Proj", color = projection_color)
@@ -432,14 +432,14 @@ ax.set_ylabel(r"Relative $L^2$ solution error")
 ax.set_title(r"Relative $L^2$ errors")
 ax.legend()
 #plt.show()
-fig.savefig(L2savepath)
+fig.savefig(L2savepath, dpi=300)
 
 
 # Save a time-series plot of solution norms (analogous to the L2 error figure)
 norm_compare_name = "Solution_Norms" + standard_identification +  f'strong_reg_{strong_reg:.2e}' + ".png"
 normsavepath = standard_savefolder / norm_compare_name
 
-fig, ax = plt.subplots()
+fig, ax = plt.subplots(figsize=(15, 5))
 ax.plot(predict_times, FOM_norm, label="FOM norm", color='black')
 ax.plot(predict_times, standard_ROM_norm, label="Unregularized OpInf", color=weak_opinf_color)
 ax.plot(predict_times, strong_reg_ROM_norm, label="Strongly Reg. OpInf", color=strong_opinf_color)

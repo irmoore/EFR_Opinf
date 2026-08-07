@@ -85,7 +85,7 @@ class RK_solvers:
             self.delta = filter_dict["delta"]
             self.chi = filter_dict["chi"]
             self.filter_time = filter_dict["filter_time"]
-            self.r_restriction = filter_dict["filter_time"]
+            self.r_restriction = filter_dict["r_restriction"]
             self._setup_differential_filter(self.delta)
 
     def update_chi_only(self, chi: np.float64):
@@ -207,7 +207,9 @@ class OpInf_ROM:
         "centering": False,
         "datapath": data_dir,
         "time_integrator": RK4_solver,
-        "fenicsx_interface": fenicsx_interface
+        "fenicsx_interface": fenicsx_interface,
+        "L2_orthogonal": False,  # if True, POD modes are computed orthogonal
+                                  # w.r.t. the FEM mass matrix 
          }
         """
         for key, value in opinf_dict.items():
@@ -294,7 +296,11 @@ class OpInf_ROM:
         transformer = opinf.pre.ShiftScaleTransformer(centering = centering)
         trans_data = transformer.fit_transform(train_data)
 
-        basis = opinf.basis.PODBasis(num_vectors=r)
+        if self.L2_orthogonal:
+            mass_weights = self.fenicsx_interface.assemble_mass_0_BCs()
+            basis = opinf.basis.PODBasis(num_vectors=r, weights=mass_weights, svdsolver = 'method-of-snapshots')
+        else:
+            basis = opinf.basis.PODBasis(num_vectors=r)
         comp_data = basis.fit_compress(trans_data)
 
         operators = [opinf.operators.LinearOperator(),
@@ -567,7 +573,7 @@ class OpInf_ROM:
                        validate_times: np.ndarray, base_filter_dict: dict, chi_list: np.ndarray,
                        delta_list: np.ndarray = None, r_restriction_list: np.ndarray = None,
                        max_growth: float = None, selection: str = "most_stable") -> dict:
-        """Select EFR filter parameters by stability alone -- no FOM ground truth involved.
+        """Select EFR filter parameters by stability alone 
 
         Every combination of chi (always) x delta/r_restriction (as required by
         base_filter_dict["filter_method"]) is integrated over validate_times and
@@ -613,6 +619,11 @@ class OpInf_ROM:
         else:
             raise ValueError("filter_method must be one of `Projection`, `Differential`, `Differential_Partial`")
 
+        filter_time = base_filter_dict["filter_time"]
+        post_filter_mask = validate_times >= filter_time
+        assert np.any(post_filter_mask), \
+            "filter_time is past the end of validate_times -- nothing to check"
+
         candidates = []
         for params in param_combos:
             filter_dict = {**base_filter_dict, **params}
@@ -625,8 +636,9 @@ class OpInf_ROM:
             if Q_ROM.shape[1] != validate_times.shape[0]:
                 continue # if integration failed, go to next iteration
 
+            Q_ROM_post_filter = Q_ROM[:, post_filter_mask]
             max_diff_Qhat_trial = np.max(
-                np.abs(Q_ROM - mean_Qhat_train[:,np.newaxis]), axis=1
+                np.abs(Q_ROM_post_filter - mean_Qhat_train[:,np.newaxis]), axis=1
             )
             growth = np.max(max_diff_Qhat_trial) / np.max(max_diff_Qhat_train)
 
@@ -776,6 +788,7 @@ def run_nse_rom(config: dict):
     rom_cfg = config.get("rom", {})
     r_list = rom_cfg.get("r_list", [20])
     centering = rom_cfg.get("centering", True)
+    L2_orthogonal = rom_cfg.get("L2_orthogonal", False)
 
     reg_cfg = config.get("regularization", {})
     reuse_cached_reg = reg_cfg.get("reuse_cached", False)
@@ -813,7 +826,8 @@ def run_nse_rom(config: dict):
             "centering": centering,
             "datapath": data_dir,
             "time_integrator": RK4_solver,
-            "fenicsx_interface": fenicsx_interface
+            "fenicsx_interface": fenicsx_interface,
+            "L2_orthogonal": L2_orthogonal,
         }
 
         opinf_ROM = OpInf_ROM(opinf_dict)

@@ -14,6 +14,11 @@ rom:
   r_list: [20]              # default: [20]. ROM dimensions to sweep -- one
                               # full train/validate/test pass per r.
   centering: true             # default: true
+  L2_orthogonal: false          # default: false. If true, POD modes are
+                                  # computed orthogonal w.r.t. the FEM mass
+                                  # matrix (the true L2 inner product)
+                                  # instead of the Euclidean inner product
+                                  # on DOF vectors.
 
 regularization:
   reuse_cached: False          # default: false. If an optimal_reg_parameters.json
