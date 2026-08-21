@@ -171,7 +171,7 @@ for i, peclet in enumerate(Peclet_list):
     solution_arr, solution_times = CDR_FOM.solve_CDR(peclet, dt, solution_end_time)
     
     FOM_sols.append(solution_arr)
-    FOM_nus.append(1/peclet)
+    FOM_nus.append([1/peclet, 1.0])
     FOM_sol_times.append(solution_times)
     if i > 0:
         assert np.allclose(solution_times, FOM_sol_times[i-1])
@@ -195,7 +195,7 @@ ddt_estimator = opinf.ddt.UniformFiniteDifferencer(solution_times)
 
 
 operators = [opinf.operators.ConstantOperator(),
-             opinf.operators.AffineLinearOperator(1)]
+             opinf.operators.AffineLinearOperator(2)]
 solver = opinf.lstsq.L2Solver(regularizer= 1e-5)
 model = opinf.models.ParametricContinuousModel(operators = operators,solver = solver)
 
@@ -218,7 +218,7 @@ test_sol, test_times = CDR_FOM.solve_CDR(test_pec, dt, test_end)
 predict_times = test_times
 
 ROM_model = opinf_ROM.model
-fixed_model = ROM_model.evaluate(1./test_pec)
+fixed_model = ROM_model.evaluate([1./test_pec, 1.0])
 
 u0 = test_sol[:,0]
 
@@ -254,7 +254,7 @@ strong_rel_e,_ = strong_abs_err / FOM_norm
 ROM_model = opinf_ROM.model
 ROM_model.solver.regularizer = 0.0
 ROM_model.refit()
-fixed_model = ROM_model.evaluate(1./test_pec)
+fixed_model = ROM_model.evaluate([1./test_pec, 1.0])
 
 
 
@@ -383,13 +383,13 @@ proj_rel_e, _ = proj_abs_err / FOM_norm
 
 # Save VTK/BP files for each model
 
-# fom_filename = "FOM_solutions.bp"
-# CDR_FOM.save_function_list_VTK(FOM_sol_list, standard_savefolder, fom_filename, predict_times)
-# print(f"Saved FOM solutions to: {standard_savefolder / fom_filename}")
+fom_filename = "FOM_solutions.bp"
+CDR_FOM.save_function_list_VTK(FOM_sol_list, standard_savefolder, fom_filename, predict_times)
+print(f"Saved FOM solutions to: {standard_savefolder / fom_filename}")
 
-# strong_reg_opinf_filename = "ROM_solutions" + f'strong_reg_{strong_reg:.2e}' + ".bp"
-# CDR_FOM.save_function_list_VTK(strong_reg_ROM_sol_list, standard_savefolder, strong_reg_opinf_filename, predict_times)
-# print(f"Saved Strong Reg OpInf solutions to: {standard_savefolder / strong_reg_opinf_filename}")
+strong_reg_opinf_filename = "ROM_solutions" + f'strong_reg_{strong_reg:.2e}' + ".bp"
+CDR_FOM.save_function_list_VTK(strong_reg_ROM_sol_list, standard_savefolder, strong_reg_opinf_filename, predict_times)
+print(f"Saved Strong Reg OpInf solutions to: {standard_savefolder / strong_reg_opinf_filename}")
 
 # standard_filename = standard_identification + "_solutions.bp"
 # CDR_FOM.save_function_list_VTK(standard_ROM_sol_list, standard_savefolder, standard_filename, predict_times)
@@ -399,9 +399,9 @@ proj_rel_e, _ = proj_abs_err / FOM_norm
 # CDR_FOM.save_function_list_VTK(proj_ROM_sol_list, proj_savefolder, proj_filename, predict_times)
 # print(f"Saved projection-filtered solutions to: {proj_savefolder / proj_filename}")
 
-# diff_filename = diff_identification + "_solutions.bp"
-# CDR_FOM.save_function_list_VTK(diff_ROM_sol_list, diff_savefolder, diff_filename, predict_times)
-# print(f"Saved differential-filtered solutions to: {diff_savefolder / diff_filename}")
+diff_filename = diff_identification + "_solutions.bp"
+CDR_FOM.save_function_list_VTK(diff_ROM_sol_list, diff_savefolder, diff_filename, predict_times)
+print(f"Saved differential-filtered solutions to: {diff_savefolder / diff_filename}")
 
 # diff_partial_filename = diff_partial_identification + "_solutions.bp"
 # CDR_FOM.save_function_list_VTK(diff_partial_ROM_sol_list, diff_partial_savefolder, diff_partial_filename, predict_times)
@@ -430,6 +430,7 @@ ax.axvline(test_end, color = 'purple', linestyle = '--', label= 'End of validati
 ax.set_xlabel("Time")
 ax.set_ylabel(r"Relative $L^2$ solution error")
 ax.set_title(r"Relative $L^2$ errors")
+ax.set_ylim((10**(-7),10**0))
 ax.legend()
 #plt.show()
 fig.savefig(L2savepath, dpi=300)

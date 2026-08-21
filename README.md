@@ -6,12 +6,12 @@ and [OpInf](https://operator-inference.github.io/opinf/source/index.html).
 
 ## Install
 
-Major dependencies are the FEniCSx stack (`dolfinx`, `mpi4py`, `petsc4py`, `basix`,
+Requires the FEniCSx libraries. (`dolfinx`, `mpi4py`, `petsc4py`, `basix`,
 `ufl`, `adios4dolfinx`). This library contains C++ code that requires downloading 
 conda-forge binaries, so this package is not pip installable. 
 
 This project uses [pixi](https://pixi.sh) to manage both the
-conda-forge stack and Python (mainly OpInf). Pixi is similar 
+conda-forge items and Python (mainly OpInf). Pixi is similar 
 to conda. If you have any concerns about using the curl script below, please go
 to their website and determine your installation preferences. 
 
@@ -30,11 +30,6 @@ install of the `efr_opinf` package. This environment uses package versions known
 to be compatible as of May 2026.
 
 ## Running examples
-
-Mesh/data/results paths (`Meshes/`, `NSE_data/`, `Results/`) are resolved via
-`src/efr_opinf/_paths.py`, which anchors them to the repository root based on
-the installed package's own location, not the current working directory. So
-scripts and notebooks under `examples/` can be run from anywhere:
 
 ```bash
 pixi run python examples/test_CDR_parametric.py
@@ -58,7 +53,7 @@ This functions almost identically to a conda environment.
 pixi run python examples/test_CDR_parametric.py
 ```
 
-2. NSE FPC: Go to EFR_OpInf_script.ipynb. follow the instructions to generate FOM data and run the cells. 
+2. NSE FPC: Go to NSE_FPC_EFR_Opinf_script.ipynb. follow the instructions to generate FOM data and run the cells. 
 
 ## Package layout
 
